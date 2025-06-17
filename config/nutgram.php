@@ -22,4 +22,7 @@ return [
 
     // Set log channel
     'log_channel' => env('TELEGRAM_LOG_CHANNEL', 'null'),
+
+    'group_chat_id' => env('TELEGRAM_GROUP_CHAT_ID'),
+
 ];

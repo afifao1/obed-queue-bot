@@ -6,10 +6,11 @@ use App\Models\Operator;
 use App\Models\LunchSetting;
 use App\Models\Supervisor;
 use Carbon\Carbon;
+use App\Jobs\SendLunchReminder;
 use SergiX44\Nutgram\Telegram\Types\Keyboard\InlineKeyboardMarkup;
 use SergiX44\Nutgram\Telegram\Types\Keyboard\InlineKeyboardButton;
 
-$groupChatId = config('telegram.group_chat_id');
+$groupChatId = config('nutgram.group_chat_id');
 
 // Start komandasi
 $bot->onCommand('start', function (Nutgram $bot) {
@@ -63,9 +64,17 @@ $bot->onCommand('join', function (Nutgram $bot) {
 });
 
 // Guruhga navbat yig‘ish uchun e’lon
-$bot->onCommand('announce', function (Nutgram $bot) use ($groupChatId) {
-    $bot->sendMessage($groupChatId, '⚡️ Kim obed navbatiga yozilishni xohlaydi? Iltimos, shaxsiydan /join deb yozing.');
+$bot->onCommand('announce', function (Nutgram $bot) {
+    // Guruh chat ID ni env orqali olish
+    $groupChatId = config('nutgram.group_chat_id');
+
+    // To'g'ri formatda xabar yuborish
+    $bot->sendMessage(
+        chat_id: $groupChatId,
+        text: '⚡️ Kim obed navbatiga yozilishni xohlaydi? Iltimos, shaxsiydan /join deb yozing.'
+    );
 });
+
 
 // Navbatni boshlash (supervizor komandasi)
 $bot->onCommand('next', function (Nutgram $bot) {
@@ -97,12 +106,11 @@ $bot->onCommand('next', function (Nutgram $bot) {
             InlineKeyboardButton::make('✅ Obedga chiqish', callback_data: 'confirm_lunch_' . $operator->id)
         );
 
-$bot->sendMessage(
-    $operator->telegram_id,
-    "Sizning obedga chiqish navbatingiz keldi! Iltimos, tasdiqlang.",
-    reply_markup: $keyboard
-);
-
+    $bot->sendMessage(
+        $operator->telegram_id,
+        "Sizning obedga chiqish navbatingiz keldi! Iltimos, tasdiqlang.",
+        reply_markup: $keyboard
+    );
 });
 
 // Operator obedga chiqishni tasdiqlaydi
@@ -124,7 +132,8 @@ $bot->onCallbackQueryData('confirm_lunch_{operator_id}', function (Nutgram $bot,
 
     $bot->sendMessage($operator->telegram_id, 'Siz obedga chiqdingiz. Obed tugashiga 5 daqiqa qolganda eslatma beriladi.');
 
-    // Bu yerda 5 daqiqalik eslatmani cron yoki queue orqali yozib qo‘shish kerak
+    // 5 daqiqa qolganda eslatma berish uchun queue
+    SendLunchReminder::dispatch($operator->telegram_id)->delay(now()->addMinutes(25));
 });
 
 // Supervizor bugungi statusni ko‘rishi
@@ -150,4 +159,77 @@ $bot->onCommand('status', function (Nutgram $bot) {
     }
 
     $bot->sendMessage($bot->chatId(), $text);
+});
+
+// Operator obeddan qaytishi
+$bot->onCommand('back', function (Nutgram $bot) {
+    $operator = Operator::where('telegram_id', $bot->userId())->first();
+    if (!$operator || $operator->status != 'at_lunch') {
+        $bot->sendMessage('Siz hozir obedda emassiz yoki topilmadingiz.');
+        return;
+    }
+
+    $operator->status = 'finished';
+    $operator->save();
+
+    $bot->sendMessage('Obed tugadi, ishga qaytdingiz.');
+});
+
+$bot->onCommand('testgroupid', function (Nutgram $bot) use ($groupChatId) {
+    $bot->sendMessage($bot->chatId(), "Group Chat ID: " . $groupChatId);
+});
+
+
+$bot->onCommand('register_operator {name}', function (Nutgram $bot, $name) {
+    $telegramId = $bot->userId();
+
+    $operator = \App\Models\Operator::where('telegram_id', $telegramId)->first();
+    if ($operator) {
+        $bot->sendMessage('❗️ Siz allaqachon operator sifatida ro‘yxatdan o‘tgansiz.');
+        return;
+    }
+
+    \App\Models\Operator::create([
+        'telegram_id' => $telegramId,
+        'name' => $name,
+        'status' => 'available',
+    ]);
+
+    $bot->sendMessage("✅ Siz operator sifatida ro‘yxatdan o‘tdingiz: $name");
+});
+
+$bot->onCommand('register_supervisor {name}', function (Nutgram $bot, $name) {
+    $telegramId = $bot->userId();
+
+    $supervisor = \App\Models\Supervisor::where('telegram_id', $telegramId)->first();
+    if ($supervisor) {
+        $bot->sendMessage('❗️ Siz allaqachon supervizor sifatida ro‘yxatdan o‘tgansiz.');
+        return;
+    }
+
+    \App\Models\Supervisor::create([
+        'telegram_id' => $telegramId,
+        'name' => $name,
+    ]);
+
+    $bot->sendMessage("✅ Siz supervizor sifatida ro‘yxatdan o‘tdingiz: $name");
+});
+
+
+$bot->onCommand('whoami', function (Nutgram $bot) {
+    $telegramId = $bot->userId();
+
+    $operator = \App\Models\Operator::where('telegram_id', $telegramId)->first();
+    if ($operator) {
+        $bot->sendMessage("👤 Siz operator ekansiz: {$operator->name}");
+        return;
+    }
+
+    $supervisor = \App\Models\Supervisor::where('telegram_id', $telegramId)->first();
+    if ($supervisor) {
+        $bot->sendMessage("👤 Siz supervizor ekansiz: {$supervisor->name}");
+        return;
+    }
+
+    $bot->sendMessage("❗️ Siz hali ro‘yxatdan o‘tmagansiz.");
 });
